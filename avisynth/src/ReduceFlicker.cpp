@@ -38,29 +38,29 @@ get_main_proc(int strength, bool aggressive, arch_t arch)
 
     std::map<std::tuple<int, bool, arch_t>, proc_filter_t> func;
 
-    func[make_tuple(1, false, NO_SIMD)] = proc_c<1>;
-    func[make_tuple(2, false, NO_SIMD)] = proc_c<2>;
-    func[make_tuple(3, false, NO_SIMD)] = proc_c<3>;
+    func[make_tuple(1, false, arch_t::NO_SIMD)] = proc_c<1>;
+    func[make_tuple(2, false, arch_t::NO_SIMD)] = proc_c<2>;
+    func[make_tuple(3, false, arch_t::NO_SIMD)] = proc_c<3>;
 
-    func[make_tuple(1, true, NO_SIMD)] = proc_a_c<1>;
-    func[make_tuple(2, true, NO_SIMD)] = proc_a_c<2>;
-    func[make_tuple(3, true, NO_SIMD)] = proc_a_c<3>;
+    func[make_tuple(1, true, arch_t::NO_SIMD)] = proc_a_c<1>;
+    func[make_tuple(2, true, arch_t::NO_SIMD)] = proc_a_c<2>;
+    func[make_tuple(3, true, arch_t::NO_SIMD)] = proc_a_c<3>;
 
-    func[make_tuple(1, false, USE_SSE2)] = proc_simd<__m128i, 1>;
-    func[make_tuple(2, false, USE_SSE2)] = proc_simd<__m128i, 2>;
-    func[make_tuple(3, false, USE_SSE2)] = proc_simd<__m128i, 3>;
+    func[make_tuple(1, false, arch_t::USE_SSE2)] = proc_simd<__m128i, 1>;
+    func[make_tuple(2, false, arch_t::USE_SSE2)] = proc_simd<__m128i, 2>;
+    func[make_tuple(3, false, arch_t::USE_SSE2)] = proc_simd<__m128i, 3>;
 
-    func[make_tuple(1, true, USE_SSE2)] = proc_a_simd<__m128i, 1>;
-    func[make_tuple(2, true, USE_SSE2)] = proc_a_simd<__m128i, 2>;
-    func[make_tuple(3, true, USE_SSE2)] = proc_a_simd<__m128i, 3>;
+    func[make_tuple(1, true, arch_t::USE_SSE2)] = proc_a_simd<__m128i, 1>;
+    func[make_tuple(2, true, arch_t::USE_SSE2)] = proc_a_simd<__m128i, 2>;
+    func[make_tuple(3, true, arch_t::USE_SSE2)] = proc_a_simd<__m128i, 3>;
 #if defined(__AVX2__)
-    func[make_tuple(1, false, USE_AVX2)] = proc_simd<__m256i, 1>;
-    func[make_tuple(2, false, USE_AVX2)] = proc_simd<__m256i, 2>;
-    func[make_tuple(3, false, USE_AVX2)] = proc_simd<__m256i, 3>;
+    func[make_tuple(1, false, arch_t::USE_AVX2)] = proc_simd<__m256i, 1>;
+    func[make_tuple(2, false, arch_t::USE_AVX2)] = proc_simd<__m256i, 2>;
+    func[make_tuple(3, false, arch_t::USE_AVX2)] = proc_simd<__m256i, 3>;
 
-    func[make_tuple(1, true, USE_AVX2)] = proc_a_simd<__m256i, 1>;
-    func[make_tuple(2, true, USE_AVX2)] = proc_a_simd<__m256i, 2>;
-    func[make_tuple(3, true, USE_AVX2)] = proc_a_simd<__m256i, 3>;
+    func[make_tuple(1, true, arch_t::USE_AVX2)] = proc_a_simd<__m256i, 1>;
+    func[make_tuple(2, true, arch_t::USE_AVX2)] = proc_a_simd<__m256i, 2>;
+    func[make_tuple(3, true, arch_t::USE_AVX2)] = proc_a_simd<__m256i, 3>;
 #endif
     return func[make_tuple(strength, aggressive, arch)];
 }
@@ -68,13 +68,15 @@ get_main_proc(int strength, bool aggressive, arch_t arch)
 
 
 ReduceFlicker::
-ReduceFlicker(PClip c, int s, bool aggressive, bool grey, arch_t arch, bool ra) :
+ReduceFlicker(PClip c, int s, bool aggressive, bool grey, arch_t arch, bool ra, ise_t* env) :
     GenericVideoFilter(c), strength(s), raccess(ra)
 {
+    has_at_least_v8 = true;
+    try { env->CheckVersion(8); }
+    catch (const AvisynthError&) { has_at_least_v8 = false; }
     numPlanes = vi.IsY8() || grey ? 1 : 3;
-    align = arch == USE_AVX2 ? 32 : 16;
+    align = arch == arch_t::USE_AVX2 ? 32 : 16;
     mainProc = get_main_proc(strength, aggressive, arch);
-    child->SetCacheHints(CACHE_WINDOW, strength == 3 ? 7 : 5);
 }
 
 
@@ -133,7 +135,8 @@ PVideoFrame __stdcall ReduceFlicker::GetFrame(int n, ise_t* env)
         }
     }
 
-    PVideoFrame dst = env->NewVideoFrame(vi, align);
+    PVideoFrame dst;
+    if (has_at_least_v8) dst = env->NewVideoFrameP(vi, &curr, align); else dst = env->NewVideoFrame(vi, align);
 
     const int planes[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
     for (int p = 0; p < numPlanes; ++p) {
@@ -173,22 +176,26 @@ PVideoFrame __stdcall ReduceFlicker::GetFrame(int n, ise_t* env)
     return dst;
 }
 
-
-extern int has_sse2();
-extern int has_avx2();
-
-static arch_t get_arch(int opt) noexcept
+int __stdcall ReduceFlicker::SetCacheHints(int cachehints, int frame_range)
 {
-    if (opt == NO_SIMD || !has_sse2()) {
-        return NO_SIMD;
+    return cachehints == CACHE_GET_MTMODE ? MT_MULTI_INSTANCE : 0;
+}
+
+static arch_t get_arch(int opt, ise_t* env) noexcept
+{
+    const bool has_sse2 = env->GetCPUFlags() & CPUF_SSE2;
+    const bool has_avx2 = env->GetCPUFlags() & CPUF_AVX2;
+
+    if (opt == static_cast<int>(arch_t::NO_SIMD) || !has_sse2) {
+        return arch_t::NO_SIMD;
     }
 #if !defined(__AVX2__)
     return USE_SSE2;
 #else
-    if (opt == USE_SSE2 || !has_avx2()) {
-        return USE_SSE2;
+    if (opt == static_cast<int>(arch_t::USE_SSE2) || !has_avx2) {
+        return arch_t::USE_SSE2;
     }
-    return USE_AVX2;
+    return arch_t::USE_AVX2;
 #endif // __AVX2__
 }
 
@@ -212,13 +219,13 @@ AVSValue __cdecl ReduceFlicker::create(AVSValue args, void*, ise_t* env)
         bool grey = args[3].AsBool(false);
 
         bool is_avsplus = env->FunctionExists("SetFilterMTMode");
-        arch_t arch = get_arch(args[4].AsInt(USE_AVX2));
-        if (arch == USE_AVX2 && !is_avsplus) {
-            arch = USE_SSE2;
+        arch_t arch = get_arch(args[4].AsInt(static_cast<int>(arch_t::USE_AVX2)), env);
+        if (arch == arch_t::USE_AVX2 && !is_avsplus) {
+            arch = arch_t::USE_SSE2;
         }
 
         bool raccess = args[5].AsBool(true);
-        return new ReduceFlicker(clip, strength, aggressive, grey, arch, raccess);
+        return new ReduceFlicker(clip, strength, aggressive, grey, arch, raccess, env);
 
     } catch (const char* e) {
         env->ThrowError("ReduceFlicker: %s", e);
@@ -237,10 +244,6 @@ AvisynthPluginInit3(ise_t* env, const AVS_Linkage* const vectors)
     env->AddFunction("ReduceFlicker",
                      "c[strength]i[aggressive]b[grey]b[opt]i[raccess]b",
                      ReduceFlicker::create, nullptr);
-    if (env->FunctionExists("SetFilterMTMode")) {
-        static_cast<IScriptEnvironment2*>(
-            env)->SetFilterMTMode("ReduceFlicker", MT_NICE_FILTER, true);
-    }
 
     return "ReduceFlicker for avs2.6/avs+ ver. " REDUCE_FLICKER_VERSION;
 }

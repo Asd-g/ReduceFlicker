@@ -8,11 +8,11 @@
 #include <avisynth.h>
 
 #define REDUCE_FLICKER_VERSION "0.0.1"
+#define __AVX2__
 
-
-enum arch_t {
-    NO_SIMD = 0,
-    USE_SSE2 = 1,
+enum class arch_t {
+    NO_SIMD,
+    USE_SSE2,
     USE_AVX2
 };
 
@@ -31,14 +31,16 @@ class ReduceFlicker : public GenericVideoFilter {
     const int strength;
     size_t align;
     bool raccess;
+    bool has_at_least_v8;
 
     proc_filter_t mainProc;
 
 public:
-    ReduceFlicker(PClip c, int str, bool agr, bool grey, arch_t arch, bool raccess);
+    ReduceFlicker(PClip c, int str, bool agr, bool grey, arch_t arch, bool raccess, ise_t* env);
     ~ReduceFlicker() {}
     PVideoFrame __stdcall GetFrame(int n, ise_t* env);
     static AVSValue __cdecl create(AVSValue args, void*, ise_t* env);
+    int __stdcall SetCacheHints(int cachehints, int frame_range);
 };
 
 

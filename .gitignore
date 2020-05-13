@@ -1,8 +1,8 @@
 ReduceFlicker-src/*
 avisynth/archives/*
-avisynth/src/Debug/*
-avisynth/src/Release/*
-avisynth/src/x64/*
+avisynth/build/Debug/*
+avisynth/build/Release/*
+avisynth/build/x64/*
 vapoursynth/vs2015/Debug/*
 vapoursynth/vs2015/Release/*
 vapoursynth/vs2015/x64/*
