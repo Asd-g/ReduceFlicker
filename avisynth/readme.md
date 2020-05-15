@@ -5,7 +5,7 @@
 ### Requirements:
 	- avisynth2.60/avisynth+r1576 or later.
 	- WindowsVista sp2 or later.
-	- Visual C++ Redistributable Packages for Visual Studio 2015.
+	- Visual C++ Redistributable Packages for Visual Studio 2019.
 
 ### Syntax:
 	ReduceFlicker(clip, int "strength", bool "aggressive", bool "grey", int "opt")
