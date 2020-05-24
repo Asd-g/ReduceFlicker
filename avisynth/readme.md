@@ -3,15 +3,15 @@
 	This plugin has only ReduceFlicker(). ReduceFluctuation() and LockClense() are not implemented.
 
 ### Requirements:
-	- avisynth2.60/avisynth+r1576 or later.
+	- avisynth2.60 / avisynth+r1576 or later.
 	- WindowsVista sp2 or later.
 	- Visual C++ Redistributable Packages for Visual Studio 2019.
 
 ### Syntax:
-	ReduceFlicker(clip, int "strength", bool "aggressive", bool "grey", int "opt")
+	ReduceFlicker(clip, int "strength", bool "aggressive", bool "grey", int "opt", bool "raccess", bool "luma")
 
 #### clip:
-	All planar formats(YV24/YV16/YV12/YV411/Y8) are supported.
+	Clip must be in Y/YUV 8..32-bit format.
 
 #### strength:
 	Specify the strength of ReduceFlicker. Higher values mean more aggressive operation.
@@ -37,6 +37,16 @@
 	others(default) - Use AVX2 routine if possible.
 	                  If your machine does not have AVX2 or you are using avisynth2.6,
 	                  fallback to 1.
+                      
+#### raccess:
+    When the previous and next frames are accessed.
+    
+    True (default) - the next frames are accessed fisrt.
+    False - the previous frame are accessed first.
+    
+#### luma:
+    Whether luma plane will be processed or not. If set this to false, luma plane will be garbage.
+    Default value is true.
 
 ### Lisence:
 	GPLv2 or later.
