@@ -22,65 +22,54 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02111, USA.
 
 
 #include <algorithm>
-#include <map>
-#include <tuple>
 
 #include "ReduceFlicker.h"
-#include "proc_filter.h"
+#include "avs/minmax.h"
 
+extern proc_filter_t get_main_proc(arch_t arch, int strength, bool aggressive, int bits_per_sample);
 
-
-
-proc_filter_t
-get_main_proc(int strength, bool aggressive, arch_t arch)
+static void copy_plane(PVideoFrame& dst, PVideoFrame& src, int plane, IScriptEnvironment* env)
 {
-    using std::make_tuple;
-
-    std::map<std::tuple<int, bool, arch_t>, proc_filter_t> func;
-
-    func[make_tuple(1, false, arch_t::NO_SIMD)] = proc_c<1>;
-    func[make_tuple(2, false, arch_t::NO_SIMD)] = proc_c<2>;
-    func[make_tuple(3, false, arch_t::NO_SIMD)] = proc_c<3>;
-
-    func[make_tuple(1, true, arch_t::NO_SIMD)] = proc_a_c<1>;
-    func[make_tuple(2, true, arch_t::NO_SIMD)] = proc_a_c<2>;
-    func[make_tuple(3, true, arch_t::NO_SIMD)] = proc_a_c<3>;
-
-    func[make_tuple(1, false, arch_t::USE_SSE2)] = proc_simd<__m128i, 1>;
-    func[make_tuple(2, false, arch_t::USE_SSE2)] = proc_simd<__m128i, 2>;
-    func[make_tuple(3, false, arch_t::USE_SSE2)] = proc_simd<__m128i, 3>;
-
-    func[make_tuple(1, true, arch_t::USE_SSE2)] = proc_a_simd<__m128i, 1>;
-    func[make_tuple(2, true, arch_t::USE_SSE2)] = proc_a_simd<__m128i, 2>;
-    func[make_tuple(3, true, arch_t::USE_SSE2)] = proc_a_simd<__m128i, 3>;
-#if defined(__AVX2__)
-    func[make_tuple(1, false, arch_t::USE_AVX2)] = proc_simd<__m256i, 1>;
-    func[make_tuple(2, false, arch_t::USE_AVX2)] = proc_simd<__m256i, 2>;
-    func[make_tuple(3, false, arch_t::USE_AVX2)] = proc_simd<__m256i, 3>;
-
-    func[make_tuple(1, true, arch_t::USE_AVX2)] = proc_a_simd<__m256i, 1>;
-    func[make_tuple(2, true, arch_t::USE_AVX2)] = proc_a_simd<__m256i, 2>;
-    func[make_tuple(3, true, arch_t::USE_AVX2)] = proc_a_simd<__m256i, 3>;
-#endif
-    return func[make_tuple(strength, aggressive, arch)];
+    const uint8_t* srcp = src->GetReadPtr(plane);
+    int src_pitch = src->GetPitch(plane);
+    int height = src->GetHeight(plane);
+    int row_size = src->GetRowSize(plane);
+    uint8_t* destp = dst->GetWritePtr(plane);
+    int dst_pitch = dst->GetPitch(plane);
+    env->BitBlt(destp, dst_pitch, srcp, src_pitch, row_size, height);
 }
 
-
-
-ReduceFlicker::
-ReduceFlicker(PClip c, int s, bool aggressive, bool grey, arch_t arch, bool ra, ise_t* env) :
-    GenericVideoFilter(c), strength(s), raccess(ra)
+ReduceFlicker::ReduceFlicker(PClip c, int s, bool aggressive, bool grey, arch_t arch, bool ra, bool luma, IScriptEnvironment* env) :
+    GenericVideoFilter(c), strength(s), _grey(grey), raccess(ra), _luma(luma)
 {
     has_at_least_v8 = true;
     try { env->CheckVersion(8); }
     catch (const AvisynthError&) { has_at_least_v8 = false; }
-    numPlanes = vi.IsY8() || grey ? 1 : 3;
+
+    int planecount = min(vi.NumComponents(), 3);
+    for (int i = 0; i < planecount; i++)
+    {
+        if (i == 0)
+            processPlane[i] = _luma;
+        else
+            processPlane[i] = !_grey;
+    }
+
     align = arch == arch_t::USE_AVX2 ? 32 : 16;
-    mainProc = get_main_proc(strength, aggressive, arch);
+    
+    int bits_per_sample;
+    if (vi.BitsPerComponent() == 8)
+        bits_per_sample = 8;
+    else if (vi.BitsPerComponent() <= 16)
+        bits_per_sample = 16;
+    else
+        bits_per_sample = 32;
+
+    mainProc = get_main_proc(arch, strength, aggressive, bits_per_sample);
 }
 
 
-PVideoFrame __stdcall ReduceFlicker::GetFrame(int n, ise_t* env)
+PVideoFrame __stdcall ReduceFlicker::GetFrame(int n, IScriptEnvironment* env)
 {
     PVideoFrame curr, prev[3], next[3];
     const int nf = vi.num_frames - 1;
@@ -138,39 +127,46 @@ PVideoFrame __stdcall ReduceFlicker::GetFrame(int n, ise_t* env)
     PVideoFrame dst;
     if (has_at_least_v8) dst = env->NewVideoFrameP(vi, &curr, align); else dst = env->NewVideoFrame(vi, align);
 
-    const int planes[] = {PLANAR_Y, PLANAR_U, PLANAR_V};
-    for (int p = 0; p < numPlanes; ++p) {
-        const int plane = planes[p];
-        
-        const int width = curr->GetRowSize(plane);
-        const int height = curr->GetHeight(plane);
-        const int cpitch = curr->GetPitch(plane);
-        const int dpitch = dst->GetPitch(plane);
-        const uint8_t* currp = curr->GetReadPtr(plane);
-        uint8_t* dstp = dst->GetWritePtr(plane);
-        
-        const uint8_t *prevp[3], *nextp[3];
-        int ppitch[3], npitch[3];
-        switch (strength) {
-        case 3:
-            prevp[2] = prev[2]->GetReadPtr(plane);
-            ppitch[2] = prev[2]->GetPitch(plane);
-            nextp[2] = next[2]->GetReadPtr(plane);
-            npitch[2] = next[2]->GetPitch(plane);
-        case 2:
-            nextp[1] = next[1]->GetReadPtr(plane);
-            npitch[1] = next[1]->GetPitch(plane);
-        default:
-            prevp[0] = prev[0]->GetReadPtr(plane);
-            ppitch[0] = prev[0]->GetPitch(plane);
-            prevp[1] = prev[1]->GetReadPtr(plane);
-            ppitch[1] = prev[1]->GetPitch(plane);
-            nextp[0] = next[0]->GetReadPtr(plane);
-            npitch[0] = next[0]->GetPitch(plane);
-        }
+    int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
+    int planes_r[4] = { PLANAR_G, PLANAR_B, PLANAR_R, PLANAR_A };
+    const int* current_planes = (vi.IsYUV() || vi.IsYUVA()) ? planes_y : planes_r;
+    int planecount = std::min(vi.NumComponents(), 3);
+    for (int i = 0; i < planecount; i++)
+    {
+        const int plane = current_planes[i];
 
-        mainProc(dstp, prevp, currp, nextp, dpitch, ppitch, cpitch, npitch,
-                 width, height);
+        if (processPlane[i])
+        {
+            int width = curr->GetRowSize(plane);
+            int height = curr->GetHeight(plane);
+            int cpitch = curr->GetPitch(plane);
+            int dpitch = dst->GetPitch(plane);
+            const uint8_t* currp = curr->GetReadPtr(plane);
+            uint8_t* dstp = dst->GetWritePtr(plane);
+
+            const uint8_t* prevp[3], * nextp[3];
+            int ppitch[3], npitch[3];
+            switch (strength) {
+            case 3:
+                prevp[2] = prev[2]->GetReadPtr(plane);
+                ppitch[2] = prev[2]->GetPitch(plane);
+                nextp[2] = next[2]->GetReadPtr(plane);
+                npitch[2] = next[2]->GetPitch(plane);
+            case 2:
+                nextp[1] = next[1]->GetReadPtr(plane);
+                npitch[1] = next[1]->GetPitch(plane);
+            default:
+                prevp[0] = prev[0]->GetReadPtr(plane);
+                ppitch[0] = prev[0]->GetPitch(plane);
+                prevp[1] = prev[1]->GetReadPtr(plane);
+                ppitch[1] = prev[1]->GetPitch(plane);
+                nextp[0] = next[0]->GetReadPtr(plane);
+                npitch[0] = next[0]->GetPitch(plane);
+            }
+
+            mainProc(dstp, currp, prevp, nextp, dpitch, cpitch, ppitch, npitch,
+                width / vi.ComponentSize(), height);
+        }
     }
     
     return dst;
@@ -181,22 +177,34 @@ int __stdcall ReduceFlicker::SetCacheHints(int cachehints, int frame_range)
     return cachehints == CACHE_GET_MTMODE ? MT_MULTI_INSTANCE : 0;
 }
 
-static arch_t get_arch(int opt, ise_t* env) noexcept
+static arch_t get_arch(int opt, IScriptEnvironment* env) noexcept
 {
     const bool has_sse2 = env->GetCPUFlags() & CPUF_SSE2;
+    const bool has_sse41 = env->GetCPUFlags() & CPUF_SSE4_1;
     const bool has_avx2 = env->GetCPUFlags() & CPUF_AVX2;
 
-    if (opt == static_cast<int>(arch_t::NO_SIMD) || !has_sse2) {
+#if !defined(__SSE2__)
+    return NO_SIMD
+#else
+    if (opt == 0 || !has_sse2)
         return arch_t::NO_SIMD;
-    }
-#if !defined(__AVX2__)
+
+#if !defined(__SSE4_1__)
     return USE_SSE2;
 #else
-    if (opt == static_cast<int>(arch_t::USE_SSE2) || !has_avx2) {
+    if (opt == 1 || !has_sse41)
         return arch_t::USE_SSE2;
-    }
+
+#if !defined(__AVX2__)
+    return USE_SSE41;
+#else
+    if (opt == 2 || !has_avx2)
+        return arch_t::USE_SSE41;
+
     return arch_t::USE_AVX2;
 #endif // __AVX2__
+#endif // __SSE4_1__
+#endif // __SSE2__
 }
 
 static void validate(bool cond, const char* msg)
@@ -204,12 +212,12 @@ static void validate(bool cond, const char* msg)
     if (cond) throw msg;
 }
 
-AVSValue __cdecl ReduceFlicker::create(AVSValue args, void*, ise_t* env)
+AVSValue __cdecl ReduceFlicker::create(AVSValue args, void*, IScriptEnvironment* env)
 {
     try {
         PClip clip = args[0].AsClip();
         const VideoInfo& vi = clip->GetVideoInfo();
-        validate(!vi.IsPlanar(), "input clip must be planar format.");
+        validate(vi.IsRGB(), "input clip must be in Y/YUV 8..32-bit format.");
 
         int strength = args[1].AsInt(2);
         validate(strength < 1 || strength > 3,
@@ -218,14 +226,14 @@ AVSValue __cdecl ReduceFlicker::create(AVSValue args, void*, ise_t* env)
         bool aggressive = args[2].AsBool(false);
         bool grey = args[3].AsBool(false);
 
-        bool is_avsplus = env->FunctionExists("SetFilterMTMode");
-        arch_t arch = get_arch(args[4].AsInt(static_cast<int>(arch_t::USE_AVX2)), env);
-        if (arch == arch_t::USE_AVX2 && !is_avsplus) {
-            arch = arch_t::USE_SSE2;
-        }
+        arch_t arch = get_arch(args[4].AsInt(-1), env);
+        validate(args[4].AsInt() < 0 || args[4].AsInt() > 3,
+            "opt must be between 0..3.");
 
         bool raccess = args[5].AsBool(true);
-        return new ReduceFlicker(clip, strength, aggressive, grey, arch, raccess, env);
+
+        bool luma = args[6].AsBool(true);
+        return new ReduceFlicker(clip, strength, aggressive, grey, arch, raccess, luma, env);
 
     } catch (const char* e) {
         env->ThrowError("ReduceFlicker: %s", e);
@@ -238,11 +246,11 @@ const AVS_Linkage* AVS_linkage = nullptr;
 
 
 extern "C" __declspec(dllexport) const char* __stdcall
-AvisynthPluginInit3(ise_t* env, const AVS_Linkage* const vectors)
+AvisynthPluginInit3(IScriptEnvironment* env, const AVS_Linkage* const vectors)
 {
     AVS_linkage = vectors;
     env->AddFunction("ReduceFlicker",
-                     "c[strength]i[aggressive]b[grey]b[opt]i[raccess]b",
+                     "c[strength]i[aggressive]b[grey]b[opt]i[raccess]b[luma]b",
                      ReduceFlicker::create, nullptr);
 
     return "ReduceFlicker for avs2.6/avs+ ver. " REDUCE_FLICKER_VERSION;
