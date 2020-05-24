@@ -114,7 +114,7 @@ PVideoFrame __stdcall ReduceFlicker::GetFrame(int n, IScriptEnvironment* env)
             prev[0] = child->GetFrame(std::max(n - 1, 0), env);
             curr = child->GetFrame(n, env);
             next[0] = child->GetFrame(std::min(n + 1, nf), env);
-            next[1] = child->GetFrame(std::min(n + 1, nf), env);
+            next[1] = child->GetFrame(std::min(n + 2, nf), env);
             break;
         default:
             prev[1] = child->GetFrame(std::max(n - 2, 0), env);
