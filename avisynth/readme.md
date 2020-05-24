@@ -30,13 +30,12 @@
 
 #### opt:
 	Controls which cpu optimizations are used.
-	Currently, this filter has three(C++, SSE2 and AVX2) routines.
+	Currently, this filter has four routines.
 
 	0 - Use C++ routine.
-	1 - Use SSE2 routine.
-	others(default) - Use AVX2 routine if possible.
-	                  If your machine does not have AVX2 or you are using avisynth2.6,
-	                  fallback to 1.
+	1 - Use SSE2/SSE routine. If cpu does not have SSE2, fallback to 0.
+	2 - Use SSE4.1/SSE2/SSE routine. If cpu does not have SSE4.1, fallback to 1.
+    3 (default) - Use AVX2/AVX routine. If cpu does not have AVX2, fallback to 2.
                       
 #### raccess:
     When the previous and next frames are accessed.
