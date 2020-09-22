@@ -1,3 +1,8 @@
+##### 0.1.1:
+    Separated SSE2 and AVX2 code.
+    Registered as MT_NICE_FILTER.
+    Added support for all planar formats.
+
 ##### 0.1.0:
     Added version.
     Added support for 10..32-bit.
